@@ -24,8 +24,7 @@ pub trait Shamir<F: Field> {
     fn split(secret: &F, k: usize, n: usize) -> Vec<Self::Share>;
 }
 
-/// Instance of `Shamir` using compact shares.
-pub struct CompactShamir;
+
 /// Instance of `Shamir` using randomized shares.
 pub struct RandomShamir;
 
@@ -52,7 +51,7 @@ impl<X: Copy, Y> GetX<X> for Share<X, Y> {
     }
 }
 
-type CompactShare<F> = Share<u8, F>;
+
 type RandomShare<F> = Share<F, F>;
 
 fn check_split_parameters(k: usize, n: usize) {
