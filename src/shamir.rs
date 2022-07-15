@@ -1,6 +1,4 @@
 //! Implementation of the Shamir's Secret Sharing scheme.
-
-use crate::field::Field;
 use crate::field::Field;
 use rand::thread_rng;
 #[cfg(feature = "parse")]
@@ -22,19 +20,30 @@ pub trait Shamir<F: Field> {
 
     /// Splits a secret into n shares, with k shares being sufficient to reconstruct it.
     fn split(secret: &F, k: usize, n: usize) -> Vec<Self::Share>;
+
+    /// Reconstructs a secret from a set of shares, given the threshold parameter k. Returns `None`
+    /// if reconstruction failed.
+    fn reconstruct(shares: &[Self::Share], k: usize) -> Option<F>;
+
+    /// Parses a share's x coordinate from a string. Returns `None` if the parsing fails.
+    #[cfg(feature = "parse")]
+    fn parse_x(s: &str) -> Option<Self::X>;
+    /// Parses a share from a string. Returns `None` if the parsing fails.
+    #[cfg(feature = "parse")]
+    fn parse_share(s: &str) -> Option<Self::Share>;
 }
 
+/// Instance of `Shamir` using compact shares.
+pub struct CompactShamir;
 
-/// Instance of `Shamir` using randomized shares.
-pub struct RandomShamir;
-
-/// Representation of a share.
+/// Share: A coordinate on the polynimia, (x, y).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Share<X, Y> {
     x: X,
     y: Y,
 }
 
+// customize the output appearance
 impl<X, Y> Display for Share<X, Y>
 where
     X: Display,
@@ -51,8 +60,7 @@ impl<X: Copy, Y> GetX<X> for Share<X, Y> {
     }
 }
 
-
-type RandomShare<F> = Share<F, F>;
+type CompactShare<F> = Share<u8, F>;
 
 fn check_split_parameters(k: usize, n: usize) {
     debug_assert!(k != 0);
@@ -61,32 +69,14 @@ fn check_split_parameters(k: usize, n: usize) {
     debug_assert!(n < 256);
 }
 
-fn check_reconstruct_parameters<X, Y>(shares: &[Share<X, Y>], k: usize)
-where
-    X: Debug + PartialEq,
-    Y: Debug,
-{
-    debug_assert!(k != 0);
-    debug_assert!(k < 256);
-    debug_assert!(shares.len() >= k);
-    for (i, s) in shares.iter().enumerate() {
-        for (j, t) in shares.iter().enumerate() {
-            if i != j {
-                debug_assert!(s.x != t.x);
-            }
-        }
-    }
-}
-
 fn generate_polynom<F: Field + Debug + Display>(secret: &F, k: usize) -> Vec<F> {
-    // random number generator
     let mut rng = thread_rng();
 
     let mut polynom = Vec::with_capacity(k);
-    //println!("Polynom = {}", secret);
+    println!("Polynom = {}", secret);
     for i in 1..k {
         polynom.push(F::uniform(&mut rng));
-        //println!("    + {} x^{}", polynom.last().unwrap(), i);
+        println!("    + {} x^{}", polynom.last().unwrap(), i);
     }
 
     polynom
@@ -104,7 +94,6 @@ impl<F: Field + Debug + Display> Shamir<F> for CompactShamir {
         let mut shares: Vec<Self::Share> = Vec::with_capacity(n);
         for i in 1..=(n as u8) {
             let x = F::from(i);
-
             let mut y = *secret;
             let mut xn = x;
             for p in &polynom {
@@ -117,48 +106,40 @@ impl<F: Field + Debug + Display> Shamir<F> for CompactShamir {
 
         shares
     }
-    
 
+    fn reconstruct(shares: &[Self::Share], k: usize) -> Option<F> {
+        let gfx: Vec<F> = shares.iter().map(|share| F::from(share.x)).collect();
 
-}
-
-impl<F: Field + Debug + Display> Shamir<F> for RandomShamir {
-    type X = F;
-    type Share = RandomShare<F>;
-
-    fn split(secret: &F, k: usize, n: usize) -> Vec<Self::Share> {
-        check_split_parameters(k, n);
-
-        let polynom = generate_polynom(secret, k);
-        let mut rng = thread_rng();
-
-        let mut shares: Vec<Self::Share> = Vec::with_capacity(n);
-        for _ in 0..n {
-            let x = 'retry: loop {
-                let x = F::uniform(&mut rng);
-                if x == F::ZERO {
-                    continue 'retry;
+        let mut secret = F::ZERO;
+        for (i, si) in shares.iter().take(k).enumerate() {
+            let mut lagrange = F::ONE;
+            let mut denom = F::ONE;
+            let xi = si.x;
+            for (j, sj) in shares.iter().take(k).enumerate() {
+                if j != i {
+                    let xj = sj.x;
+                    lagrange = lagrange * &gfx[j];
+                    denom = denom * &F::from_diff(xj, xi);
                 }
-                for s in &shares {
-                    if x == s.x {
-                        continue 'retry;
-                    }
-                }
-                break x;
-            };
-
-            let mut y = *secret;
-            let mut xn = x;
-            for p in &polynom {
-                y += &(xn * p);
-                xn = xn * &x;
             }
-
-            shares.push(Self::Share { x, y })
+            secret += &(lagrange * &si.y * &denom.invert());
         }
+        Some(secret)
+    }
 
-        shares
+    #[cfg(feature = "parse")]
+    fn parse_x(s: &str) -> Option<Self::X> {
+        s.parse::<u8>().ok()
+    }
+
+    #[cfg(feature = "parse")]
+    fn parse_share(s: &str) -> Option<Self::Share> {
+        let regex = Regex::new(r"^([0-9]+)\|([0-9a-fA-F]+)$").unwrap();
+        let captures = regex.captures(s)?;
+
+        let x: u8 = captures[1].parse().ok()?;
+        let y = F::from_bytes(&hex::decode(&captures[2]).ok()?)?;
+
+        Some(Self::Share { x, y })
     }
 }
-
-
